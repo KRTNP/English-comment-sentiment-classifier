@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: sentiment-english-api
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn api.server:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    envVars:
+      - key: MODEL_ID
+        value: Kittigon/sentiment-english-3class-seed52
+      - key: HF_TOKEN
+        sync: false
+      - key: MODEL_DIR
+        value: outputs/seed_stability_stage2_best/seed_52
+      - key: MAX_LENGTH
+        value: "256"
