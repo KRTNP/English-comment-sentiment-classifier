@@ -1,143 +1,163 @@
-Sentiment (Negative/Neutral/Positive) training pipeline for English internet comments
-==========================================================================
+# English comment sentiment classifier
 
-Goal
-- Train a 3-class sentiment classifier: negative / neutral / positive.
-- Primary domain: English reviews/comments.
-- Uses staged fine-tuning:
-  Stage 1: binary (pos/neg) on IMDb-style data to adapt the encoder.
-  Stage 2: 3-class on Cornell scale dataset (neutral is a real class) to learn neutral.
+A training pipeline for a 3-class sentiment classifier (negative, neutral, positive) on English reviews and comments, plus a FastAPI server for deploying the model on Render.
 
-Why staged
-- IMDb datasets are binary only.
-- Cornell scale dataset provides 3-class labels derived from normalized ratings (0,1,2).
-- Stage 1 improves general sentiment signal; Stage 2 teaches neutral explicitly.
+## Why two training stages
 
-Folder layout
-- data/ (created by you)
-- outputs/ (created by scripts)
-- scripts/ (this folder)
+IMDb data only has positive and negative labels, so it can't teach the model what neutral looks like. The Cornell scale dataset does have a neutral class, with 3-class labels (0, 1, 2) derived from normalized ratings. Training happens in two stages:
 
-1) Setup
-- Python 3.10+ recommended
-- Install deps:
-  pip install -r requirements.txt
+1. **Binary (positive/negative)** on IMDb-style data, to adapt the encoder to sentiment in general.
+2. **3-class** on the Cornell scale dataset, to learn neutral explicitly.
 
-2) Data options (you can use any subset)
-A) IMDb CSV (your uploaded file)
-- Input: /mnt/data/IMDB Dataset.csv (or your own path)
-- Script will:
-  - remove HTML tags
-  - drop duplicates
-  - create train/val/test splits (70/10/20)
-  - output to data/imdb_csv/
+## Folder layout
 
-Command:
-  python scripts/prepare_imdb_csv.py --input "/mnt/data/IMDB Dataset.csv" --out_dir "data/imdb_csv"
+- `data/`: datasets (you create this)
+- `outputs/`: model checkpoints (created by the scripts)
+- `scripts/`: training, evaluation, and inference scripts
 
-B) Stanford ACL IMDb (Large Movie Review Dataset)
-- Downloads and extracts aclImdb_v1.tar.gz
-Command:
-  python scripts/download_acl_imdb.py --out_dir "data/aclImdb"
+## Setup
 
-Then prepare CSV:
-  python scripts/prepare_acl_imdb.py --acl_dir "data/aclImdb/aclImdb" --out_dir "data/aclImdb_csv"
+Python 3.10 or later is recommended.
 
-C) Cornell scale dataset (3-class with neutral)
-- Downloads and extracts scale_data.tar.gz
-- Produces data/cornell_scale/scale_3class.csv
+```bash
+pip install -r requirements.txt
+```
 
-Command:
-  python scripts/download_cornell_scale.py --out_dir "data/cornell_scale"
-  python scripts/prepare_cornell_scale.py --scale_dir "data/cornell_scale" --out_csv "data/cornell_scale/scale_3class.csv"
+## Data
 
-D) Rotten Tomatoes (optional binary add-on)
-- Pulled via Hugging Face datasets in Stage 1 (no download script needed)
+You can use any combination of the datasets below.
 
-3) Training (recommended path)
-Stage 1 (binary)
-- Uses IMDb CSV if provided; otherwise uses ACL IMDb CSV.
-- Optionally mixes Rotten Tomatoes sentence polarity.
+### IMDb CSV
 
-Command:
-  python scripts/train_stage1_binary.py \
-    --model_name "microsoft/deberta-v3-base" \
-    --imdb_csv_dir "data/imdb_csv" \
-    --out_dir "outputs/stage1_binary" \
-    --max_length 256 \
-    --epochs 2
+A single CSV of labeled IMDb reviews. The script strips HTML tags, removes duplicates, splits the data 70/10/20 into train, validation, and test, and writes the result to `data/imdb_csv/`.
 
-Stage 2 (3-class with neutral)
-- Continues from Stage 1 encoder weights, re-initializes classification head for 3 labels.
-- Trains on Cornell scale dataset.
+```bash
+python scripts/prepare_imdb_csv.py --input "/mnt/data/IMDB Dataset.csv" --out_dir "data/imdb_csv"
+```
 
-Command:
-  python scripts/train_stage2_3class.py \
-    --base_checkpoint "outputs/stage1_binary" \
-    --cornell_csv "data/cornell_scale/scale_3class.csv" \
-    --out_dir "outputs/final_3class" \
-    --max_length 256 \
-    --epochs 3
+### Stanford Large Movie Review Dataset (ACL IMDb)
 
-4) Evaluation
-Binary test (IMDb):
-  python scripts/evaluate.py --task binary --model_dir "outputs/stage1_binary" --imdb_csv_dir "data/imdb_csv" --max_length 256
+Download and extract `aclImdb_v1.tar.gz`, then convert it to CSV:
 
-3-class test (Cornell):
-  python scripts/evaluate.py --task 3class --model_dir "outputs/final_3class" --cornell_csv "data/cornell_scale/scale_3class.csv" --max_length 256
+```bash
+python scripts/download_acl_imdb.py --out_dir "data/aclImdb"
+python scripts/prepare_acl_imdb.py --acl_dir "data/aclImdb/aclImdb" --out_dir "data/aclImdb_csv"
+```
 
-5) Inference
+### Cornell scale dataset
+
+Download and extract `scale_data.tar.gz`, then build `data/cornell_scale/scale_3class.csv`:
+
+```bash
+python scripts/download_cornell_scale.py --out_dir "data/cornell_scale"
+python scripts/prepare_cornell_scale.py --scale_dir "data/cornell_scale" --out_csv "data/cornell_scale/scale_3class.csv"
+```
+
+### Rotten Tomatoes (optional)
+
+Stage 1 can mix in Rotten Tomatoes sentence polarity data. It's loaded through Hugging Face `datasets`, so there's no download script.
+
+## Training
+
+### Stage 1: binary
+
+Uses the IMDb CSV if you prepared it, otherwise the ACL IMDb CSV. Rotten Tomatoes can be mixed in optionally.
+
+```bash
+python scripts/train_stage1_binary.py \
+  --model_name "microsoft/deberta-v3-base" \
+  --imdb_csv_dir "data/imdb_csv" \
+  --out_dir "outputs/stage1_binary" \
+  --max_length 256 \
+  --epochs 2
+```
+
+### Stage 2: 3-class
+
+Starts from the Stage 1 encoder weights, replaces the classification head with a new 3-label head, and trains on the Cornell scale dataset.
+
+```bash
+python scripts/train_stage2_3class.py \
+  --base_checkpoint "outputs/stage1_binary" \
+  --cornell_csv "data/cornell_scale/scale_3class.csv" \
+  --out_dir "outputs/final_3class" \
+  --max_length 256 \
+  --epochs 3
+```
+
+## Evaluation
+
+Binary test on IMDb:
+
+```bash
+python scripts/evaluate.py --task binary --model_dir "outputs/stage1_binary" --imdb_csv_dir "data/imdb_csv" --max_length 256
+```
+
+3-class test on Cornell:
+
+```bash
+python scripts/evaluate.py --task 3class --model_dir "outputs/final_3class" --cornell_csv "data/cornell_scale/scale_3class.csv" --max_length 256
+```
+
+Stage 1 with DeBERTa or RoBERTa usually reaches high accuracy on in-domain IMDb-style test data. Stage 2 macro-F1 will be lower than the binary score, and how much lower depends on how strictly neutral is defined.
+
+## Inference
+
 Single text:
-  python scripts/predict.py --model_dir "outputs/final_3class" --text "This is amazing."
 
-File (one comment per line):
-  python scripts/predict.py --model_dir "outputs/final_3class" --input_file "comments.txt" --output_file "predictions.csv"
+```bash
+python scripts/predict.py --model_dir "outputs/final_3class" --text "This is amazing."
+```
 
-Notes / practical defaults
-- max_length=256 is a good default; if your comments are longer, use 384.
-- For production safety, you can add an "uncertainty neutral" rule:
-  if max(probabilities) < 0.55 => force label = neutral.
-  (supported in predict.py)
+A file with one comment per line:
 
-Expected performance (ballpark, will vary)
-- Stage 1 binary on IMDb-like data with DeBERTa/RoBERTa: typically high accuracy on in-domain test.
-- Stage 2 3-class: macro-F1 depends on how strict neutral is; expect lower than binary.
+```bash
+python scripts/predict.py --model_dir "outputs/final_3class" --input_file "comments.txt" --output_file "predictions.csv"
+```
 
-Licensing / terms
-- Respect dataset terms of use and any platform ToS if you add internet comments.
+`max_length=256` works for most comments. Use 384 if yours are longer.
 
-6) Deploy API on Render (Free Plan)
-- This repo now includes:
-  - `api/server.py` (FastAPI app)
-  - `requirements-api.txt` (serving dependencies)
-  - `render.yaml` (Render blueprint)
-  - `runtime.txt` (Python version)
+`predict.py` also supports an uncertainty rule: if the highest class probability is below 0.55, the label is forced to neutral. This is useful in production, where a low-confidence positive or negative is usually worse than a neutral.
 
-Important:
-- Render Free is CPU-only.
-- GitHub ปกติไม่รองรับไฟล์ >100MB ต่อไฟล์
-  (`model.safetensors` ของโมเดลนี้ใหญ่กว่า 100MB)
-- ทางที่แนะนำ: อัปโหลดโมเดลไป Hugging Face Hub แล้วตั้ง `MODEL_ID`
-- ทางเลือก: ใช้ Git LFS แล้วชี้ `MODEL_DIR` ไป path ใน repo
+## Deploying the API on Render (free plan)
 
-Deploy steps:
-1. Push this repo to GitHub.
-2. In Render, create service from `render.yaml` (Blueprint) or create a Web Service manually.
-3. Build command:
-   `pip install -r requirements-api.txt`
-4. Start command:
-   `uvicorn api.server:app --host 0.0.0.0 --port $PORT`
-5. Environment variables:
+The repo includes:
+
+- `api/server.py`: the FastAPI app
+- `requirements-api.txt`: serving dependencies
+- `render.yaml`: the Render blueprint
+- `runtime.txt`: the Python version
+
+The free plan is CPU-only. GitHub also rejects files over 100 MB, and this model's `model.safetensors` is larger than that. The recommended approach is to upload the model to the Hugging Face Hub and set `MODEL_ID`. Alternatively, store the model with Git LFS and point `MODEL_DIR` at its path in the repo.
+
+### Steps
+
+1. Push the repo to GitHub.
+2. In Render, create a service from `render.yaml` (Blueprint), or create a Web Service manually.
+3. Build command: `pip install -r requirements-api.txt`
+4. Start command: `uvicorn api.server:app --host 0.0.0.0 --port $PORT`
+5. Set the environment variables:
    - `MODEL_ID=<your-hf-model-id>` (recommended)
-   - `HF_TOKEN=<your-hf-token>` (if model is private)
-   - `MODEL_DIR=outputs/seed_stability_stage2_best/seed_52` (fallback when files exist on disk)
+   - `HF_TOKEN=<your-hf-token>` (only if the model is private)
+   - `MODEL_DIR=outputs/seed_stability_stage2_best/seed_52` (used when the model files are on disk)
    - `MAX_LENGTH=256`
 
-API endpoints:
-- `GET /health`
-- `POST /predict`
-  body example:
-  `{"text":"This movie is great","max_length":256}`
-- `POST /predict/batch`
-  body example:
-  `{"texts":["great movie","boring plot"],"max_length":256}`
+### Endpoints
+
+`GET /health`
+
+`POST /predict`
+
+```json
+{"text":"This movie is great","max_length":256}
+```
+
+`POST /predict/batch`
+
+```json
+{"texts":["great movie","boring plot"],"max_length":256}
+```
+
+## Licensing
+
+Follow each dataset's terms of use, and the terms of service of any platform you collect comments from.
